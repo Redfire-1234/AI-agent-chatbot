@@ -1,36 +1,25 @@
-import streamlit as st
 from transformers import AutoTokenizer, AutoModelForCausalLM
+from peft import PeftModel
 import torch
 
-# Your HuggingFace model link
-HF_MODEL = "Redfire-1234/AI-agent"
-
-st.title("🤖 My Custom ChatGPT")
+BASE_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"      # official base model
+LORA_REPO = "Redfire-1234/AI-agent"            # your repo containing LoRA files
 
 @st.cache_resource
 def load_model():
-    tokenizer = AutoTokenizer.from_pretrained(HF_MODEL)
-    model = AutoModelForCausalLM.from_pretrained(
-        HF_MODEL,
+    tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
+
+    base_model = AutoModelForCausalLM.from_pretrained(
+        BASE_MODEL,
         torch_dtype=torch.float16,
         device_map="auto"
     )
-    return tokenizer, model
 
-tokenizer, model = load_model()
-
-user_input = st.text_input("Enter your message:")
-
-if st.button("Generate Response"):
-    inputs = tokenizer(user_input, return_tensors="pt").to(model.device)
-
-    output = model.generate(
-        **inputs,
-        max_new_tokens=200,
-        temperature=0.7
+    # Load LoRA on top of base model
+    model = PeftModel.from_pretrained(
+        base_model,
+        LORA_REPO
     )
 
-    response = tokenizer.decode(output[0], skip_special_tokens=True)
+    return tokenizer, model
 
-    st.subheader("Response:")
-    st.write(response)
