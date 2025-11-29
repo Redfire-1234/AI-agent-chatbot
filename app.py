@@ -3,7 +3,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
 
 # Your HuggingFace model link
-HF_MODEL = "yourusername/my-chatbot-model"
+HF_MODEL = "Redfire-1234/AI-agent"
 
 st.title("🤖 My Custom ChatGPT")
 
