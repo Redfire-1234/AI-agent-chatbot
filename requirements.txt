@@ -1,8 +1,9 @@
-streamlit
+transformers==4.41.2
 torch
-transformers
-accelerate
 peft
-huggingface_hub
+accelerate
 einops
+sentencepiece
+streamlit
+
 
