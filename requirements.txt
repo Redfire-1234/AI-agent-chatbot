@@ -1,5 +1,7 @@
 streamlit
+torch
 transformers
 accelerate
-torch
+peft
 huggingface_hub
+
