@@ -1,128 +1,152 @@
 import streamlit as st
 import torch
-import gc
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from peft import PeftModel
 
 st.set_page_config(
     page_title="AI Agent Chatbot",
     page_icon="🤖",
-    layout="centered"
+    layout="wide"
 )
-
-try:
-    from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
-    from peft import PeftModel
-except ImportError as e:
-    st.error(f"❌ Import Error: {e}")
-    st.stop()
 
 BASE_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"
 LORA_REPO = "Redfire-1234/AI-agent"
 
-@st.cache_resource(show_spinner=False)
+# Initialize session state for chat history
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+if "chat_input" not in st.session_state:
+    st.session_state.chat_input = ""
+
+@st.cache_resource
 def load_model():
-    """Load model with aggressive memory optimization"""
-    try:
-        # Clear any cached memory
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        
-        st.info("🔄 Loading tokenizer...")
-        tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
-        
-        st.info("🔄 Loading model with 8-bit quantization... (this reduces memory by 75%)")
-        
-        # 8-bit quantization config
-        quantization_config = BitsAndBytesConfig(
-            load_in_8bit=True,
-            llm_int8_threshold=6.0,
-            llm_int8_has_fp16_weight=False,
+    tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
+    base_model = AutoModelForCausalLM.from_pretrained(
+        BASE_MODEL,
+        torch_dtype=torch.float16,
+        device_map="auto",
+        low_cpu_mem_usage=True
+    )
+    model = PeftModel.from_pretrained(base_model, LORA_REPO)
+    model.eval()
+    return tokenizer, model
+
+def generate_response(tokenizer, model, user_input):
+    """Generate response from the model"""
+    inputs = tokenizer(user_input, return_tensors="pt").to(model.device)
+    
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=200,
+            temperature=0.7,
+            do_sample=True,
+            top_p=0.9,
+            pad_token_id=tokenizer.eos_token_id
         )
-        
-        base_model = AutoModelForCausalLM.from_pretrained(
-            BASE_MODEL,
-            quantization_config=quantization_config,
-            device_map="auto",
-            low_cpu_mem_usage=True,
-            max_memory={0: "900MB", "cpu": "2GB"}  # Limit memory usage
-        )
-        
-        st.info("🔄 Loading LoRA adapter...")
-        model = PeftModel.from_pretrained(base_model, LORA_REPO)
-        model.eval()
-        
-        return tokenizer, model
-        
-    except Exception as e:
-        st.error(f"❌ Error: {str(e)}")
-        st.error("⚠️ **Memory Error:** Streamlit Cloud doesn't have enough RAM for this model.")
-        st.info("👉 **Solution:** Deploy to Hugging Face Spaces (16GB RAM free) instead!")
-        st.stop()
+    
+    reply = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    
+    # Clean the response - remove the input if it's in the output
+    if user_input in reply:
+        reply = reply.replace(user_input, "").strip()
+    
+    return reply
 
-def generate_response(tokenizer, model, user_input, max_tokens=150, temperature=0.7):
-    """Generate response with memory cleanup"""
-    try:
-        inputs = tokenizer(user_input, return_tensors="pt", truncation=True, max_length=512)
-        inputs = {k: v.to(model.device) for k, v in inputs.items()}
-        
-        with torch.no_grad():
-            outputs = model.generate(
-                **inputs,
-                max_new_tokens=max_tokens,
-                temperature=temperature,
-                do_sample=True,
-                top_p=0.9,
-                pad_token_id=tokenizer.eos_token_id
-            )
-        
-        reply = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        
-        # Cleanup
-        del inputs, outputs
-        gc.collect()
-        
-        return reply.strip()
-        
-    except Exception as e:
-        return f"Error: {str(e)}"
+def clear_chat():
+    """Clear the chat history"""
+    st.session_state.messages = []
+    st.session_state.chat_input = ""
 
-# ------------------------------- UI ------------------------------
+# Header with New Chat button
+col1, col2 = st.columns([6, 1])
+with col1:
+    st.title("🤖 AI Agent Chatbot")
+    st.caption("Powered by Qwen 2.5 + LoRA Fine-tuning")
+with col2:
+    if st.button("🗑️ New Chat", use_container_width=True, type="secondary"):
+        clear_chat()
+        st.rerun()
 
-st.title("🤖 AI Agent Chatbot")
-st.caption("⚠️ Running on limited memory - may be slow")
+# Load model with status
+with st.spinner("Loading model... (first time takes 2-3 minutes)"):
+    tokenizer, model = load_model()
 
-# Warning banner
-st.warning("⚠️ **Note:** This app requires ~3GB RAM but Streamlit Cloud only provides 1GB. If crashes occur, please use the Hugging Face Spaces deployment instead.")
+# Display chat history
+chat_container = st.container()
+with chat_container:
+    if len(st.session_state.messages) == 0:
+        st.info("👋 **Welcome to AI Agent Chatbot!**\n\n💬 Ask me anything and keep the conversation going.\n\n⚠️ **To end the conversation, simply type:** `q`")
+    
+    for message in st.session_state.messages:
+        if message["role"] == "user":
+            with st.chat_message("user", avatar="👤"):
+                st.write(message["content"])
+        else:
+            with st.chat_message("assistant", avatar="🤖"):
+                st.write(message["content"])
 
+# Chat input at the bottom
+user_input = st.chat_input("Type your message here... (Type 'q' to end conversation)")
+
+if user_input:
+    # Check if user wants to quit
+    if user_input.strip().lower() == 'q':
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": "👋 Goodbye! Click 'New Chat' to start a fresh conversation."
+        })
+        st.rerun()
+    
+    # Add user message to history
+    st.session_state.messages.append({
+        "role": "user",
+        "content": user_input
+    })
+    
+    # Generate response
+    with st.spinner("Thinking..."):
+        reply = generate_response(tokenizer, model, user_input)
+    
+    # Add assistant response to history
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": reply
+    })
+    
+    # Rerun to update the chat display
+    st.rerun()
+
+# Sidebar with settings and info
 with st.sidebar:
-    st.header("⚙️ Settings")
-    max_tokens = st.slider("Max Tokens", 50, 150, 100)  # Reduced max
-    temperature = st.slider("Temperature", 0.1, 1.0, 0.7, 0.1)
+    st.header("ℹ️ About")
+    st.write(f"**Base Model:** Qwen 2.5 1.5B")
+    st.write(f"**LoRA Adapter:** {LORA_REPO.split('/')[-1]}")
     
     st.divider()
-    st.error("⚠️ Memory Limited Mode")
-    st.caption("Reduced token limit to save memory")
-
-# Load model
-try:
-    with st.status("Loading model...", expanded=True) as status:
-        tokenizer, model = load_model()
-        status.update(label="✅ Model loaded!", state="complete")
-        st.success("✅ Ready! Ask me anything below.")
-except:
-    st.stop()
-
-# Input
-user_input = st.text_area("Your Question:", placeholder="Ask me anything...", height=100)
-
-if st.button("🚀 Send", use_container_width=True):
-    if not user_input.strip():
-        st.warning("⚠️ Please enter a question")
-    else:
-        with st.spinner("Thinking..."):
-            reply = generate_response(tokenizer, model, user_input, max_tokens=max_tokens, temperature=temperature)
-        
-        st.divider()
-        st.subheader("💬 Response:")
-        st.write(reply)
+    
+    st.header("📊 Chat Stats")
+    st.metric("Messages", len(st.session_state.messages))
+    st.metric("User Messages", len([m for m in st.session_state.messages if m["role"] == "user"]))
+    st.metric("Bot Messages", len([m for m in st.session_state.messages if m["role"] == "assistant"]))
+    
+    st.divider()
+    
+    st.header("💡 Tips")
+    st.info("""
+    - Type your question and press Enter
+    - Type 'q' to end the conversation
+    - Click 'New Chat' to start fresh
+    - All messages are saved in this session
+    """)
+    
+    st.divider()
+    
+    if st.button("🗑️ Clear History", use_container_width=True, type="primary"):
+        clear_chat()
+        st.rerun()
+    
+    st.divider()
+    st.caption("Made with ❤️ using Streamlit")
 
