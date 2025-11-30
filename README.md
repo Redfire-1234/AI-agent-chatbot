@@ -97,7 +97,7 @@ Using:
       model.push_to_hub("AI-agent")  
       tokenizer.push_to_hub("AI-agent")  
 Final model URL:  
-https://huggingface.co/user-name/model-repo-name  
+https://huggingface.co/spaces/Redfire-1234/AI-chatbot  
 
 9] Batch Inference  
 A helper function allows generating multiple responses at once:  
